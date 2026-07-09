@@ -1,4 +1,4 @@
-import { createContext, useEffect, useState, type ReactNode } from 'react'
+import { createContext, useEffect, useRef, useState, type ReactNode } from 'react'
 import type { Session, User } from '@supabase/supabase-js'
 import { supabase } from '../lib/supabase'
 
@@ -19,55 +19,47 @@ export function AdminAuthProvider({ children }: { children: ReactNode }) {
   const [isAdmin, setIsAdmin] = useState(false)
   const [fullName, setFullName] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
+  const checkIdRef = useRef(0)
 
   useEffect(() => {
-    supabase.auth.getSession().then(({ data }) => {
-      setSession(data.session)
-      if (!data.session) setLoading(false)
-    })
+    async function applySession(newSession: Session | null) {
+      const checkId = ++checkIdRef.current
 
-    const { data: subscription } = supabase.auth.onAuthStateChange((_event, newSession) => {
+      // Set session + loading in the same synchronous tick so no render can
+      // ever observe "session present but loading already false".
       setSession(newSession)
-      if (!newSession) {
+
+      if (!newSession?.user) {
         setIsAdmin(false)
         setFullName(null)
         setLoading(false)
+        return
       }
-    })
 
-    return () => subscription.subscription.unsubscribe()
-  }, [])
+      setLoading(true)
 
-  useEffect(() => {
-    if (!session?.user) return
-    let cancelled = false
-    setLoading(true)
-
-    async function checkAdmin() {
-      const userId = session!.user.id
       const [profileRes, adminRes] = await Promise.all([
-        supabase.from('profiles').select('role, full_name').eq('id', userId).maybeSingle(),
+        supabase.from('profiles').select('role, full_name').eq('id', newSession.user.id).maybeSingle(),
         supabase.rpc('is_admin'),
       ])
 
-      // eslint-disable-next-line no-console
-      console.log('[DVISION DEBUG] userId:', userId)
-      // eslint-disable-next-line no-console
-      console.log('[DVISION DEBUG] profile query:', profileRes)
-      // eslint-disable-next-line no-console
-      console.log('[DVISION DEBUG] is_admin() rpc:', adminRes)
+      if (checkIdRef.current !== checkId) return // a newer auth event superseded this one
 
-      if (cancelled) return
       setIsAdmin(adminRes.data === true)
       setFullName(profileRes.data?.full_name ?? null)
       setLoading(false)
     }
 
-    checkAdmin()
+    supabase.auth.getSession().then(({ data }) => applySession(data.session))
+
+    const { data: subscription } = supabase.auth.onAuthStateChange((_event, newSession) => {
+      applySession(newSession)
+    })
+
     return () => {
-      cancelled = true
+      subscription.subscription.unsubscribe()
     }
-  }, [session])
+  }, [])
 
   async function signIn(email: string, password: string) {
     const { error } = await supabase.auth.signInWithPassword({ email, password })
