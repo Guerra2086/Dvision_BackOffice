@@ -45,13 +45,14 @@ export function AdminAuthProvider({ children }: { children: ReactNode }) {
 
     async function checkAdmin() {
       const userId = session!.user.id
-      const [{ data: profile }, { data: adminRow }] = await Promise.all([
+      const [{ data: profile }, { data: adminResult, error: adminError }] = await Promise.all([
         supabase.from('profiles').select('role, full_name').eq('id', userId).maybeSingle(),
-        supabase.from('admin_users').select('is_active').eq('id', userId).maybeSingle(),
+        supabase.rpc('is_admin'),
       ])
 
       if (cancelled) return
-      setIsAdmin(profile?.role === 'admin' && adminRow?.is_active === true)
+      if (adminError) console.error('is_admin() rpc error:', adminError)
+      setIsAdmin(adminResult === true)
       setFullName(profile?.full_name ?? null)
       setLoading(false)
     }
